@@ -1,0 +1,11 @@
+[project]
+name = "bioctoomop"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "bioc>=2.1",
+    "medcat>=2.5.3",
+    "spacy>=3.8.11",
+]
