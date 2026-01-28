@@ -7,5 +7,6 @@ requires-python = ">=3.11"
 dependencies = [
     "bioc>=2.1",
     "medcat>=2.5.3",
+    "psycopg>=3.3.2",
     "spacy>=3.8.11",
 ]

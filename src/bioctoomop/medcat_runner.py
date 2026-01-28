@@ -1,34 +1,60 @@
 from typing import List, Dict
-from medcat.cat import CAT
 
-
-def run_medcat(cat: CAT, note_id: int, sentences: List[Dict]):
+def run_medcat_single_note(
+    note_id: int,
+    sentences: List[Dict],
+    medcat_result: Dict,
+):
     """
-    Runs MedCAT sentence-by-sentence.
-    Returns flat list of entity dicts.
+    Convert MedCAT NOTE-level output into entity rows,
+    preserving sentence mapping and offsets.
     """
     entities = []
     entity_id = 0
 
-    for sent in sentences:
-        doc = cat(sent["text"])
-        for ent in doc.ents:
-            entities.append(
-                {
-                    "entity_id": entity_id,
-                    "note_id": note_id,
-                    "sentence_id": sent["sentence_id"],
-                    "start_offset": sent["start_offset"] + ent.start_char,
-                    "end_offset": sent["start_offset"] + ent.end_char,
-                    "lexical_variant": ent.text,
-                    "snomed_id": ent._.cui,
-                    "confidence": ent._.confidence,
-                    "negated": ent._.negex,
-                    "temporality": ent._.temporal,
-                    "experiencer": ent._.experiencer,
-                    "nlp_system": f"MedCAT {cat.config.version}",
-                }
-            )
-            entity_id += 1
+    # Build sentence span index
+    sentence_spans = [
+        (
+            s["sentence_id"],
+            s["start_offset"],
+            s["start_offset"] + len(s["text"]),
+        )
+        for s in sentences
+    ]
+
+    for ent in medcat_result.get("entities", {}).values():
+        ent_start = ent["start"]
+        ent_end = ent["end"]
+
+        # Find containing sentence
+        sentence_id = None
+        for sid, s_start, s_end in sentence_spans:
+            if s_start <= ent_start < s_end:
+                sentence_id = sid
+                break
+
+        if sentence_id is None:
+            continue
+
+        entities.append(
+            {
+                "entity_id": entity_id,
+                "note_id": note_id,
+                "sentence_id": sentence_id,
+                "start_offset": ent_start,
+                "end_offset": ent_end,
+                "lexical_variant": ent.get("detected_name"),
+                "pretty_name": ent.get("pretty_name"),
+                "snomed_id": int(ent["cui"]),
+                "accuracy": ent.get("acc"),
+                "context_similarity": ent.get("context_similarity"),
+                "negated": ent.get("meta_anns", {}).get("negex"),
+                "temporality": ent.get("meta_anns", {}).get("temporality"),
+                "experiencer": ent.get("meta_anns", {}).get("experiencer"),
+                "nlp_system": "MedCAT",
+            }
+        )
+
+        entity_id += 1
 
     return entities

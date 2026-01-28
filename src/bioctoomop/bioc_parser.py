@@ -1,5 +1,7 @@
-from bioc import biocxml
+from bioc import biocjson
 from pathlib import Path
+
+from bioctoomop.sentence_splitter import apply_sentence_splitting
 
 
 def parse_bioc_file(bioc_path: Path, pmc_id: str):
@@ -8,7 +10,10 @@ def parse_bioc_file(bioc_path: Path, pmc_id: str):
     Passages are assumed sentence-level.
     """
     with open(bioc_path, "r", encoding="utf-8") as f:
-        collection = biocxml.load(f)
+        collection = biocjson.load(f)
+
+    # Apply sentence splitting if no sentences exist
+    collection = apply_sentence_splitting(collection)
 
     document = collection.documents[0]
 
@@ -19,23 +24,24 @@ def parse_bioc_file(bioc_path: Path, pmc_id: str):
     sentence_id = 0
 
     for passage in document.passages:
-        text = passage.text or ""
-        start_offset = cursor
-        end_offset = cursor + len(text)
+        for sentence in passage.sentences:
+            text = passage.text or ""
+            start_offset = cursor
+            end_offset = cursor + len(text)
 
-        sentences.append(
-            {
-                "sentence_id": sentence_id,
-                "start_offset": start_offset,
-                "end_offset": end_offset,
-                "text": text,
-                "section_type": passage.infons.get("section_type"),
-            }
-        )
+            sentences.append(
+                {
+                    "sentence_id": sentence_id,
+                    "start_offset": start_offset,
+                    "end_offset": end_offset,
+                    "text": text,
+                    "section_type": passage.infons.get("section_type"),
+                }
+            )
 
-        note_text_parts.append(text)
-        cursor = end_offset
-        sentence_id += 1
+            note_text_parts.append(sentence.text)
+            cursor = end_offset
+            sentence_id += 1
 
     note_text = "".join(note_text_parts)
 
