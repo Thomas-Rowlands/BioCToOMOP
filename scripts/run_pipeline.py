@@ -16,15 +16,18 @@ from bioctoomop.bioc_serialize import write_annotated_bioc
 
 NOTE_BATCH_SIZE = 50          # notes per MedCAT batch
 NOTE_NLP_BATCH_SIZE = 5000     # rows per DB insert
+TEST_LIMIT = 50  # Set to None for no limit, or an integer for testing with fewer files
 
 
 def main():
-    input_root = Path("/mnt/sda2/Projects/FAIRClinical_Docs")
+    input_root = Path("/mnt/sda2/Projects/FAIRClinical_NLP_Data")
     output_bioc_root = Path("/mnt/sda2/Projects/FAIRClinical_Docs_Annotated")
 
     cat = CAT.load_model_pack(
         "models/v2_Snomed2025_MIMIC_IV_bbe806e192df009f.zip"
     )
+
+    cat.pipe.tokenizer._nlp.max_length = 1_100_000  # Increase max length to handle long notes
 
     with get_conn(
         host="localhost",
@@ -42,6 +45,8 @@ def main():
         snomed_to_omop = load_snomed_to_omop_map(conn)
 
         bioc_files = [p for p in input_root.rglob("*.json") if not p.is_dir()]
+        if TEST_LIMIT is not None:
+            bioc_files = bioc_files[:TEST_LIMIT]
 
         note_buffer = []
         note_texts = []              # [(note_id, full_text)]
