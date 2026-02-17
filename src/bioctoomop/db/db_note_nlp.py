@@ -21,7 +21,7 @@ INSERT INTO omop_cdm.note_nlp (
     %(snippet)s,
     %(offset)s,
     %(lexical_variant)s,
-    NULL,
+    %(note_nlp_concept_id)s,
     %(note_nlp_source_concept_id)s,
     %(nlp_system)s,
     CURRENT_DATE,

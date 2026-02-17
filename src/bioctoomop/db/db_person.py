@@ -7,10 +7,10 @@ INSERT INTO omop_cdm.person (
     ethnicity_concept_id
 )
 VALUES (
-    1,
-    0,
-    1900,
-    0,
-    0
+    %(person_id)s,
+    %(gender_concept_id)s,
+    %(year_of_birth)s,
+    %(race_concept_id)s,
+    %(ethnicity_concept_id)s
 );
 """
