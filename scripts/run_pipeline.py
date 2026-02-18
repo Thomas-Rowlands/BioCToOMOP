@@ -43,6 +43,20 @@ def get_default_demo_values(note_year: int):
         "ethnicity_concept_id": 759814,
     }
 
+def get_processed_files(conn) -> dict:
+    processed_dict: dict[str, set[str]] = {}
+    with conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT note_source_value FROM note")
+        rows = cur.fetchall()
+    if rows:
+        # populate a set of already processed file names to skip during processing
+        for row in rows:
+            pmcid, file_name = row[0].split("::")
+            if pmcid not in processed_dict:
+                processed_dict[pmcid] = set()
+            processed_dict[pmcid].add(file_name)
+    return processed_dict
+
 
 def safe_parse_age(val):
     try:
@@ -371,13 +385,16 @@ def process_medcat_batch(
 # ================= MAIN =================
 
 def main():
-    input_root = Path("/mnt/sda2/Projects/FAIRClinical_NLP_Pipeline/Original")
+    input_root = Path("/home/msztr1/Projects/FAIRClinical_NLP_Pipeline/Original")
     cat = CAT.load_model_pack("models/v2_Snomed2025_MIMIC_IV_bbe806e192df009f.zip")
+    cat.pipe.tokenizer._nlp.max_length = 1_500_000
 
     conn_str = "host=localhost dbname=postgres user=postgres password=postgres"
 
     with psycopg.connect(conn_str) as conn:
         conn.execute("SET search_path TO omop_cdm")
+
+        processed_files = get_processed_files(conn)
 
         etl = OMOPETLManager(conn)
         max_ids = etl.get_max_ids()
@@ -394,12 +411,26 @@ def main():
         }
 
         bioc_files = list(input_root.rglob("*.json"))
+
         if TEST_LIMIT:
             bioc_files = bioc_files[:TEST_LIMIT]
 
         note_buffer, note_texts, note_sentences, note_nlp_buffer = [], [], {}, []
 
         for bioc_file in tqdm(bioc_files):
+
+            # Skip previously processed files based on pmcid and file name
+
+            if "XX" in str(bioc_file.parent.name):
+                pmc_id = str(bioc_file.name).replace(".json", "")
+            else:
+                pmc_id = str(bioc_file.parent.name).replace("_supplementary", "")
+            file_name = str(bioc_file.name)
+
+            if pmc_id in processed_files and file_name in processed_files[pmc_id]:
+                continue
+
+            # Extract and parse the BioC file to get note text and sentences
 
             parsed = parse_bioc_file(bioc_file)
             if not parsed:

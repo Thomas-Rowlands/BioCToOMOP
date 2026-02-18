@@ -22,22 +22,26 @@ def extract_crf(article_file: Path) -> BioCCollection | None:
     try:
         with article_file.open(encoding="utf-8") as f_in:
             article_bioc = biocjson.load(f_in)
-    except IOError:
+    except:
         logger.error(f"Error attempting to open: {article_file.name}, skipping")
         return None
     
     # copy embedded CRF passages ready to form a new BioCCollection/file
     matching_passages: list[tuple[int, BioCPassage]] = []
-    for idx, passage in enumerate(article_bioc.documents[0].passages):
-        # check for potential CRF title passages
-        if "title" in passage.infons["type"].lower():
-            p_text = passage.text.lower()
-            if "case presentation" == p_text or "case report" == p_text:
-                matching_passages.append((idx, passage))
-        # check for CRF content passages, they must follow on from a previous CRF passage.
-        elif "section_type" in passage.infons.keys() and "CASE" == passage.infons["section_type"]:
-            if matching_passages and idx == (matching_passages[-1][0] + 1):
-                matching_passages.append((idx, passage))
+    try:
+        for idx, passage in enumerate(article_bioc.documents[0].passages):
+            # check for potential CRF title passages
+            if "title" in passage.infons["type"].lower():
+                p_text = passage.text.lower()
+                if "case presentation" == p_text or "case report" == p_text:
+                    matching_passages.append((idx, passage))
+            # check for CRF content passages, they must follow on from a previous CRF passage.
+            elif "section_type" in passage.infons.keys() and "CASE" == passage.infons["section_type"]:
+                if matching_passages and idx == (matching_passages[-1][0] + 1):
+                    matching_passages.append((idx, passage))
+    except:
+        logger.error(f"Error processing passages in: {article_file.name}, skipping")
+        return None
 
     if matching_passages:
         # Set new article passages to be only the matching CRF passages
