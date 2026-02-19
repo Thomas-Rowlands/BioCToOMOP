@@ -263,7 +263,7 @@ def process_medcat_batch(
         note_info["note_date"] = ensure_date(note_info["note_date"])
 
         # PERSON
-        person_id = ids["person"]
+        person_id = note_info.get("person_id")
 
         demo = extract_demographics(
             entities, route_map, note_info["note_date"]
