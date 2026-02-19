@@ -46,7 +46,7 @@ def parse_bioc_file(bioc_path: Path, is_supplementary=False):
                     "start_offset": start_offset,
                     "end_offset": end_offset,
                     "text": text,
-                    "section_type": passage.infons.get("section_type"),
+                    "section_type": passage.infons.get("section_type") if not is_supplementary else "supplementary material section",
                 }
             )
 

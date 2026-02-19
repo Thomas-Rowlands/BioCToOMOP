@@ -220,20 +220,33 @@ def process_medcat_batch(
     note_texts,
     note_sentences,
     note_nlp_buffer,
-    ids,
-    is_supplementary=False
+    ids
 ):
-
-    results = list(cat.get_entities_multi_texts(texts=note_texts, n_process=1))
+    try:
+        results = list(cat.get_entities_multi_texts(texts=note_texts, n_process=1))
+    except Exception as e:
+        try:
+            # If the batch processing fails, attempt to process notes individually to isolate problematic records
+            results = []
+            for note_id_str, text in note_texts:
+                try:
+                    res = cat.get_entities(text=text)
+                    results.append((note_id_str, res))
+                except Exception as inner_e:
+                    print(f"Error processing note ID {note_id_str}: {inner_e}")
+                    results.append((note_id_str, None))  # Append None for failed records
+        except Exception as batch_e:
+            raise RuntimeError(f"Batch processing failed and individual processing also failed: {batch_e}") from batch_e
 
     note_lookup = {n["note_id"]: n for n in note_buffer}
 
     # Collect all SNOMED codes across batch
     all_codes = []
     for _, res in results:
-        for ent in res["entities"].values():
-            if ent.get("cui"):
-                all_codes.append(str(ent.get("cui")))
+        if res:
+            for ent in res["entities"].values():
+                if ent.get("cui"):
+                    all_codes.append(str(ent.get("cui")))
 
     route_map = etl.get_routing_map(all_codes)
 
@@ -246,6 +259,8 @@ def process_medcat_batch(
     obs_rows = []
 
     for note_id_str, medcat_result in results:
+        if not medcat_result:
+            continue
         note_id = int(note_id_str)
         sentences = note_sentences[note_id]
         sentences_by_id = {s["sentence_id"]: s for s in sentences}
@@ -398,7 +413,7 @@ def process_medcat_batch(
 def main():
     input_root = Path("/home/msztr1/Projects/FAIRClinical_NLP_Pipeline/Original")
     cat = CAT.load_model_pack("models/v2_Snomed2025_MIMIC_IV_bbe806e192df009f.zip")
-    cat.pipe.tokenizer._nlp.max_length = 1_500_000
+    cat.pipe.tokenizer._nlp.max_length = 2_000_000
 
     conn_str = "host=localhost dbname=postgres user=postgres password=postgres"
 
@@ -431,13 +446,22 @@ def main():
         note_buffer, note_texts, note_sentences, note_nlp_buffer = [], [], {}, []
 
         for bioc_file in tqdm(bioc_files):
+            # skip tables-json BioC files which are unsupported in this pipeline version
+            if bioc_file.name.endswith("_tables.json"):
+                continue
 
             # Skip previously processed files based on pmcid and file name
 
+            is_supplementary = False
+
             if "XX" in str(bioc_file.parent.name):
                 pmc_id = str(bioc_file.name).replace(".json", "")
+            elif "Processed" in str(bioc_file.parent.name):
+                pmc_id = str(bioc_file.parent.parent.name).replace("_supplementary", "")
+                is_supplementary = True
             else:
                 pmc_id = str(bioc_file.parent.name).replace("_supplementary", "")
+                is_supplementary = True
 
             trimmed_file_name = F"{pmc_id}::{str(bioc_file.name)}"[:50]
             trimmed_file_name = trimmed_file_name.split("::")[1]
@@ -447,7 +471,7 @@ def main():
 
             # Extract and parse the BioC file to get note text and sentences
 
-            parsed = parse_bioc_file(bioc_file)
+            parsed = parse_bioc_file(bioc_file, is_supplementary=is_supplementary)
             if not parsed:
                 continue
 
