@@ -5,15 +5,16 @@ from bioctoomop.BioC_CRF_Extractor import extract_crf
 from bioctoomop.sentence_splitter import apply_sentence_splitting
 
 
-def parse_bioc_file(bioc_path: Path):
+def parse_bioc_file(bioc_path: Path, is_supplementary=False):
     """
     One BioC file → one OMOP NOTE.
     Passages are assumed sentence-level.
     """
-    # with open(bioc_path, "r", encoding="utf-8") as f:
-    #     collection = biocjson.load(f)
-
-    collection = extract_crf(bioc_path)
+    if is_supplementary:
+        with open(bioc_path, "r", encoding="utf-8") as f:
+            collection = biocjson.load(f)
+    else:
+        collection = extract_crf(bioc_path)
     if not collection:
         return None
     # Apply sentence splitting if no sentences exist

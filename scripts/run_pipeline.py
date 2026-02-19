@@ -57,6 +57,17 @@ def get_processed_files(conn) -> dict:
             processed_dict[pmcid].add(file_name)
     return processed_dict
 
+def get_pmcid_person_id_map(conn) -> dict:
+    pmcid_map: dict[str, int] = {}
+    with conn.cursor() as cur:
+        cur.execute("SELECT person_id, SPLIT_PART(note_source_value, '::', 1) AS PMCID FROM note")
+        rows = cur.fetchall()
+    if rows:
+        for row in rows:
+            person_id, pmcid = row
+            pmcid_map[pmcid] = person_id
+    return pmcid_map
+
 
 def safe_parse_age(val):
     try:
@@ -210,6 +221,7 @@ def process_medcat_batch(
     note_sentences,
     note_nlp_buffer,
     ids,
+    is_supplementary=False
 ):
 
     results = list(cat.get_entities_multi_texts(texts=note_texts, n_process=1))
@@ -251,7 +263,6 @@ def process_medcat_batch(
         note_info["note_date"] = ensure_date(note_info["note_date"])
 
         # PERSON
-        ids["person"] += 1
         person_id = ids["person"]
 
         demo = extract_demographics(
@@ -399,6 +410,8 @@ def main():
         etl = OMOPETLManager(conn)
         max_ids = etl.get_max_ids()
 
+        person_id_map = get_pmcid_person_id_map(etl.conn)
+
         ids = {
             "note": max_ids["note"],
             "note_nlp": max_ids["note_nlp"],
@@ -425,9 +438,11 @@ def main():
                 pmc_id = str(bioc_file.name).replace(".json", "")
             else:
                 pmc_id = str(bioc_file.parent.name).replace("_supplementary", "")
-            file_name = str(bioc_file.name)
 
-            if pmc_id in processed_files and file_name in processed_files[pmc_id]:
+            trimmed_file_name = F"{pmc_id}::{str(bioc_file.name)}"[:50]
+            trimmed_file_name = trimmed_file_name.split("::")[1]
+
+            if pmc_id in processed_files and trimmed_file_name in processed_files[pmc_id]:
                 continue
 
             # Extract and parse the BioC file to get note text and sentences
@@ -439,7 +454,15 @@ def main():
             ids["note"] += 1
             note_id = ids["note"]
 
-            note_buffer.append(make_note(note_id, parsed))
+            note_record = make_note(note_id, parsed)
+            
+            if person_id_map.get(pmc_id):
+                note_record["person_id"] = person_id_map[pmc_id]
+            else:
+                ids["person"] += 1
+
+
+            note_buffer.append(note_record)
             note_texts.append((str(note_id),
                                " ".join(s["text"] for s in parsed["sentences"])))
             note_sentences[note_id] = parsed["sentences"]
