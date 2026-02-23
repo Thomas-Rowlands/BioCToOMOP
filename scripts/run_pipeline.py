@@ -278,7 +278,11 @@ def process_medcat_batch(
         note_info["note_date"] = ensure_date(note_info["note_date"])
 
         # PERSON
-        person_id = note_info.get("person_id")
+        if note_info.get("person_id") == 1: # placeholder value indicating person_id not set
+            ids["person"] += 1
+            person_id = ids["person"]
+        else:
+            person_id = note_info["person_id"]
 
         demo = extract_demographics(
             entities, route_map, note_info["note_date"]

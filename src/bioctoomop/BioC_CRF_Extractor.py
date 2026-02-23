@@ -5,7 +5,7 @@ import logging
 
 logger = logging.getLogger("BioC CRF Extractor")
 
-def extract_crf(article_file: Path) -> BioCCollection | None:
+def extract_crf(article_file: Path, is_supplementary: bool = False) -> BioCCollection | None:
     """
     Extracts and returns a BioCCollection containing only the CRF (Case Report Form) passages
     from the given BioC-formatted article file. The function searches for passages whose type
@@ -30,15 +30,20 @@ def extract_crf(article_file: Path) -> BioCCollection | None:
     matching_passages: list[tuple[int, BioCPassage]] = []
     try:
         for idx, passage in enumerate(article_bioc.documents[0].passages):
-            # check for potential CRF title passages
-            if "type" in passage.infons and "title" in passage.infons["type"].lower():
+            if is_supplementary:
                 p_text = passage.text.lower()
                 if "case presentation" == p_text or "case report" == p_text:
                     matching_passages.append((idx, passage))
-            # check for CRF content passages, they must follow on from a previous CRF passage.
-            elif "section_type" in passage.infons.keys() and "CASE" == passage.infons["section_type"]:
-                if matching_passages and idx == (matching_passages[-1][0] + 1):
-                    matching_passages.append((idx, passage))
+            else:
+                # check for potential CRF title passages
+                if "type" in passage.infons and "title" in passage.infons["type"].lower():
+                    p_text = passage.text.lower()
+                    if "case presentation" == p_text or "case report" == p_text:
+                        matching_passages.append((idx, passage))
+                # check for CRF content passages, they must follow on from a previous CRF passage.
+                elif "section_type" in passage.infons.keys() and "CASE" == passage.infons["section_type"]:
+                    if matching_passages and idx == (matching_passages[-1][0] + 1):
+                        matching_passages.append((idx, passage))
     except Exception as e:
         logger.error(f"Error processing passages in: {article_file.name}, skipping")
         return None
