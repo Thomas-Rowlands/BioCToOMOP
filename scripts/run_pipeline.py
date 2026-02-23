@@ -1,9 +1,6 @@
-import json
 import os
-import random
 import datetime
 from pathlib import Path
-from typing import List, Dict, Any, Optional
 from tqdm import tqdm
 
 import psycopg
@@ -14,9 +11,10 @@ from psycopg import sql
 from medcat.cat import CAT
 from bioctoomop.bioc_parser import parse_bioc_file
 from bioctoomop.medcat_runner import run_medcat_single_note
-from bioctoomop.omop_tables.note import make_note
-from bioctoomop.omop_tables.note_nlp import entities_to_note_nlp
-from bioctoomop.bioc_serialize import write_annotated_bioc
+from bioctoomop.omop_tables import create_condition_occurrence_row, create_drug_exposure_row, create_measurement_row, create_note_row, create_note_nlp_row, create_observation_row, create_person_row, create_procedure_occurrence_row
+from logging import Logger
+
+logger = Logger("BioCToOMOP_Pipeline")
 
 # --- CONFIGURATION ---
 # get from .env file first, then fallback to hardcoded defaults for development/testing
@@ -45,6 +43,7 @@ NLP_DERIVED_OBSERVATION_TYPE_ID = int(os.getenv("NLP_DERIVED_OBSERVATION_TYPE_ID
 CLINICAL_DOC_TYPE_ID = int(os.getenv("CLINICAL_DOC_TYPE_ID", 4309829)) # "Clinical document" type concept
 UTF8_ENCODING_ID = int(os.getenv("UTF8_ENCODING_ID", 32678)) # "UTF-8"
 ENGLISH_LANGUAGE_ID = int(os.getenv("ENGLISH_LANGUAGE_ID", 4180186)) # "English language"
+AGE_SNOMED_CODES = {"424144002", "105727008"} # Example SNOMED codes that might indicate age - replace with actual codes as needed
 
 # ================= DEMOGRAPHICS =================
 
@@ -116,8 +115,6 @@ def ensure_date(value):
 def extract_demographics(entities, route_map, note_date):
     defaults = get_default_demo_values(note_date.year)
     found = {k: None for k in defaults}
-
-    AGE_SNOMED_CODES = {"424144002", "105727008"}
 
     for ent in entities:
         s_id = str(ent.get("snomed_id"))
@@ -225,7 +222,6 @@ class OMOPETLManager:
 
 
 # ================= BATCH PROCESSOR =================
-
 def process_medcat_batch(
     cat,
     etl,
@@ -238,6 +234,7 @@ def process_medcat_batch(
     try:
         results = list(cat.get_entities_multi_texts(texts=note_texts, n_process=1))
     except Exception as e:
+        logger.error(f"Batch processing failed due to: {e}, attempting individual processing to isolate problematic records.")
         try:
             # If the batch processing fails, attempt to process notes individually to isolate problematic records
             results = []
@@ -301,31 +298,27 @@ def process_medcat_batch(
             entities, route_map, note_info["note_date"]
         )
 
-        person_rows.append({
-            "person_id": person_id,
-            "gender_concept_id": demo["gender_concept_id"],
-            "year_of_birth": demo["year_of_birth"],
-            "race_concept_id": demo["race_concept_id"],
-            "ethnicity_concept_id": demo["ethnicity_concept_id"],
-        })
+        person_row = create_person_row(
+            person_id=person_id,
+            gender=demo["gender_concept_id"],
+            year_of_birth=demo["year_of_birth"],
+            race=demo["race_concept_id"],
+            ethnicity=demo["ethnicity_concept_id"],
+        )
 
-        # NOTE
-        note_info.update({
-            "person_id": person_id,
-            "note_type_concept_id": CLINICAL_DOC_TYPE_ID,
-            "note_class_concept_id": CLINICAL_DOC_TYPE_ID,
-            "encoding_concept_id": UTF8_ENCODING_ID,
-            "language_concept_id": ENGLISH_LANGUAGE_ID,
-        })
+        person_rows.append(person_row)
 
+        # ensure note person_id matches person created
+        note_info["person_id"] = person_id
         note_rows.append(note_info)
         
 
         # ENTITIES
         for ent in entities:
-            snomed = str(ent.get("snomed_id"))
-            mapping = route_map.get(snomed)
-            if not mapping:
+            note_source_snomed_id = str(ent.get("snomed_id"))
+            # get mapped concept ID for the note source SNOMED code, if it exists in the routing map
+            snomed_concept_id = route_map.get(note_source_snomed_id)
+            if not snomed_concept_id:
                 continue
 
             event_date = ent.get("detected_date") or min(detected_dates) if detected_dates else note_info["note_date"]
@@ -337,81 +330,66 @@ def process_medcat_batch(
             sent_obj = sentences_by_id.get(ent.get("sentence_id"))
             sentence_text = sent_obj["text"] if sent_obj else None
 
-            term_modifiers = {
-                "annotation_id": ent.get("annotation_id"),
-                "pretty_name": ent.get("pretty_name"),
-                "accuracy": ent.get("acc"),
-                "context_similarity": ent.get("context_similarity"),
-                "cui": ent.get("cui"),
-                "ontology": "SNOMED CT",
-            }
+            note_nlp_row = create_note_nlp_row(note_nlp_id, note_id=note_id, ent=ent, text=sentence_text, source_concept_id=note_source_snomed_id, mapping=snomed_concept_id)
+            note_nlp_buffer.append(note_nlp_row)
 
-            note_nlp_buffer.append({
-                "note_nlp_id": note_nlp_id,
-                "note_id": note_id,
-                "snippet": sentence_text[:250],
-                "offset": f"{ent['start_offset']}:{ent['end_offset']}",
-                "lexical_variant": ent.get("lexical_variant"),
-                "note_nlp_concept_id": mapping["standard_concept_id"],
-                "note_nlp_source_concept_id": int(snomed) if int(snomed) < 2147483647 else None, # prevent overflow
-                "nlp_system": "MedCAT",
-                "nlp_date": datetime.date.today(),
-                "nlp_datetime": datetime.datetime.now(),
-                "term_modifiers": json.dumps(term_modifiers),
-            })
-
-            domain = mapping["domain_id"]
+            domain = snomed_concept_id["domain_id"]
 
             if domain == "Condition":
                 ids["condition_occurrence"] += 1
-                cond_rows.append({
-                    "condition_occurrence_id": ids["condition_occurrence"],
-                    "person_id": person_id,
-                    "condition_concept_id": mapping["standard_concept_id"],
-                    "condition_start_date": event_date,
-                    "condition_type_concept_id": NLP_DERIVED_CONDITION_TYPE_ID,
-                })
+                cond_row = create_condition_occurrence_row(
+                    condition_occurrence_id=ids["condition_occurrence"],
+                    person_id=person_id,
+                    condition_concept_id=snomed_concept_id["standard_concept_id"],
+                    condition_start_date=event_date,
+                    condition_type_concept_id=NLP_DERIVED_CONDITION_TYPE_ID,
+                )
+                cond_rows.append(cond_row)
 
             elif domain == "Measurement":
                 ids["measurement"] += 1
-                meas_rows.append({
-                    "measurement_id": ids["measurement"],
-                    "person_id": person_id,
-                    "measurement_concept_id": mapping["standard_concept_id"],
-                    "measurement_date": event_date,
-                    "measurement_type_concept_id": NLP_DERIVED_MEAS_TYPE_ID,
-                })
+                meas_row = create_measurement_row(
+                    measurement_id=ids["measurement"],
+                    person_id=person_id,
+                    measurement_concept_id=snomed_concept_id["standard_concept_id"],
+                    measurement_date=event_date,
+                    measurement_type_concept_id=NLP_DERIVED_MEAS_TYPE_ID,
+                )
+                meas_rows.append(meas_row)
 
             elif domain == "Procedure":
                 ids["procedure_occurrence"] += 1
-                proc_rows.append({
-                    "procedure_occurrence_id": ids["procedure_occurrence"],
-                    "person_id": person_id,
-                    "procedure_concept_id": mapping["standard_concept_id"],
-                    "procedure_date": event_date,
-                    "procedure_type_concept_id": NLP_DERIVED_PROCEDURE_TYPE_ID,
-                })
+                proc_row = create_procedure_occurrence_row(
+                    procedure_occurrence_id=ids["procedure_occurrence"],
+                    person_id=person_id,
+                    procedure_concept_id=snomed_concept_id["standard_concept_id"],
+                    procedure_date=event_date,
+                    procedure_type_concept_id=NLP_DERIVED_PROCEDURE_TYPE_ID,
+                )
+                proc_rows.append(proc_row)
 
             elif domain == "Drug":
                 ids["drug_exposure"] += 1
-                drug_rows.append({
-                    "drug_exposure_id": ids["drug_exposure"],
-                    "person_id": person_id,
-                    "drug_concept_id": mapping["standard_concept_id"],
-                    "drug_exposure_start_date": event_date,
-                    "drug_exposure_end_date": event_date,
-                    "drug_type_concept_id": NLP_DERIVED_DRUG_TYPE_ID,
-                })
+                drug_row = create_drug_exposure_row(
+                    drug_exposure_id=ids["drug_exposure"],
+                    person_id=person_id,
+                    drug_concept_id=snomed_concept_id["standard_concept_id"],
+                    drug_exposure_date=event_date,
+                    drug_exposure_end_date=event_date,
+                    drug_type_concept_id=NLP_DERIVED_DRUG_TYPE_ID,
+                )
+                drug_rows.append(drug_row)
 
             elif domain == "Observation":
                 ids["observation"] += 1
-                obs_rows.append({
-                    "observation_id": ids["observation"],
-                    "person_id": person_id,
-                    "observation_concept_id": mapping["standard_concept_id"],
-                    "observation_date": event_date,
-                    "observation_type_concept_id": NLP_DERIVED_OBSERVATION_TYPE_ID,
-                })
+                obs_row = create_observation_row(
+                    observation_id=ids["observation"],
+                    person_id=person_id,
+                    observation_concept_id=snomed_concept_id["standard_concept_id"],
+                    observation_date=event_date,
+                    observation_type_concept_id=NLP_DERIVED_OBSERVATION_TYPE_ID,
+                )
+                obs_rows.append(obs_row)
 
 
     etl.fast_insert("person", person_rows)
@@ -488,22 +466,23 @@ def main():
 
             # Extract and parse the BioC file to get note text and sentences
 
-            parsed = parse_bioc_file(bioc_file, is_supplementary=is_supplementary)
+            parsed = parse_bioc_file(bioc_file, pmc_id, is_supplementary=is_supplementary)
             if not parsed:
                 continue
 
             ids["note"] += 1
             note_id = ids["note"]
 
-            note_record = make_note(note_id, parsed)
-            
+            person_id = ids["person"] + 1
             if person_id_map.get(pmc_id):
-                note_record["person_id"] = person_id_map[pmc_id]
+                person_id = person_id_map[pmc_id]
             else:
                 ids["person"] += 1
 
+            note_row = create_note_row(note_id, person_id=person_id, note_text=parsed["note_text"], note_source=parsed["note_source_value"], note_type=CLINICAL_DOC_TYPE_ID, note_class=CLINICAL_DOC_TYPE_ID, encoding=UTF8_ENCODING_ID, language=ENGLISH_LANGUAGE_ID, note_date=parsed["note_date"])
+            
 
-            note_buffer.append(note_record)
+            note_buffer.append(note_row)
             note_texts.append((str(note_id),
                                " ".join(s["text"] for s in parsed["sentences"])))
             note_sentences[note_id] = parsed["sentences"]

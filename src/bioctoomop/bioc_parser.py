@@ -5,7 +5,7 @@ from bioctoomop.BioC_CRF_Extractor import extract_crf
 from bioctoomop.sentence_splitter import apply_sentence_splitting
 
 
-def parse_bioc_file(bioc_path: Path, is_supplementary=False):
+def parse_bioc_file(bioc_path: Path, pmc_id: str, is_supplementary=False):
     """
     One BioC file → one OMOP NOTE.
     Passages are assumed sentence-level.
@@ -23,13 +23,6 @@ def parse_bioc_file(bioc_path: Path, is_supplementary=False):
 
     sentence_id = 0
 
-    pmc_id = ""
-    if "XX" in str(bioc_path.parent.name):
-        pmc_id = str(bioc_path.name).replace(".json", "")
-    elif "Processed" in str(bioc_path.parent.name):
-        pmc_id = str(bioc_path.parent.parent.name).replace("_supplementary", "")
-    else:
-        pmc_id = str(bioc_path.parent.name).replace("_supplementary", "")
     file_name = str(bioc_path.name)
 
     for passage in document.passages:
@@ -55,7 +48,7 @@ def parse_bioc_file(bioc_path: Path, is_supplementary=False):
 
     return {
         "pmc_id": pmc_id,
-        "note_source_value": f"{pmc_id}::{file_name}"[:50],
+        "note_source_value": f"{pmc_id}::{file_name}",
         "note_text": note_text,
         "sentences": sentences,
         "note_date": collection.date
