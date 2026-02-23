@@ -19,19 +19,32 @@ from bioctoomop.omop_tables.note_nlp import entities_to_note_nlp
 from bioctoomop.bioc_serialize import write_annotated_bioc
 
 # --- CONFIGURATION ---
-NOTE_BATCH_SIZE = 50
-NOTE_NLP_BATCH_SIZE = 5000
-TEST_LIMIT = None # Set to an integer for testing with a subset of data  
+# get from .env file first, then fallback to hardcoded defaults for development/testing
+DOCUMENT_INPUT_PATH = os.getenv("DOCUMENT_INPUT_PATH", "/home/msztr1/Projects/FAIRClinical_NLP_Pipeline/Original")
+MEDCAT_MODEL_PATH = os.getenv("MEDCAT_MODEL_PATH", "models/v2_Snomed2025_MIMIC_IV_bbe806e192df009f.zip")
+TOKENIZER_MAX_LENGTH = int(os.getenv("TOKENIZER_MAX_LENGTH", 2_000_000))
+
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_NAME = os.getenv("DB_NAME", "postgres")
+DB_USER = os.getenv("DB_USER", "postgres")
+DB_PASS = os.getenv("DB_PASS", "postgres")
+
+
+NOTE_BATCH_SIZE = int(os.getenv("NOTE_BATCH_SIZE", 50))
+NOTE_NLP_BATCH_SIZE = int(os.getenv("NOTE_NLP_BATCH_SIZE", 5000))
+TEST_LIMIT = os.getenv("TEST_LIMIT", None)
+if TEST_LIMIT is not None:
+    TEST_LIMIT = int(TEST_LIMIT)
 
 # --- FIXED CONCEPT IDS FROM YOUR ETL RULES ---
-NLP_DERIVED_MEAS_TYPE_ID = 32423 # "NLP derived" measurement type
-NLP_DERIVED_CONDITION_TYPE_ID = 32424 # "NLP derived" condition type
-NLP_DERIVED_PROCEDURE_TYPE_ID = 32425 # "NLP derived" procedure type
-NLP_DERIVED_DRUG_TYPE_ID = 32426 # "NLP derived" drug type
-NLP_DERIVED_OBSERVATION_TYPE_ID = 32445 # "NLP derived" observation type
-CLINICAL_DOC_TYPE_ID = 4309829 # "Clinical document" type concept
-UTF8_ENCODING_ID = 32678 # "UTF-8"
-ENGLISH_LANGUAGE_ID = 4180186 # "English language"
+NLP_DERIVED_MEAS_TYPE_ID = int(os.getenv("NLP_DERIVED_MEAS_TYPE_ID", 32423)) # "NLP derived" measurement type
+NLP_DERIVED_CONDITION_TYPE_ID = int(os.getenv("NLP_DERIVED_CONDITION_TYPE_ID", 32424)) # "NLP derived" condition type
+NLP_DERIVED_PROCEDURE_TYPE_ID = int(os.getenv("NLP_DERIVED_PROCEDURE_TYPE_ID", 32425)) # "NLP derived" procedure type
+NLP_DERIVED_DRUG_TYPE_ID = int(os.getenv("NLP_DERIVED_DRUG_TYPE_ID", 32426)) # "NLP derived" drug type
+NLP_DERIVED_OBSERVATION_TYPE_ID = int(os.getenv("NLP_DERIVED_OBSERVATION_TYPE_ID", 32445)) # "NLP derived" observation type
+CLINICAL_DOC_TYPE_ID = int(os.getenv("CLINICAL_DOC_TYPE_ID", 4309829)) # "Clinical document" type concept
+UTF8_ENCODING_ID = int(os.getenv("UTF8_ENCODING_ID", 32678)) # "UTF-8"
+ENGLISH_LANGUAGE_ID = int(os.getenv("ENGLISH_LANGUAGE_ID", 4180186)) # "English language"
 
 # ================= DEMOGRAPHICS =================
 
@@ -415,11 +428,11 @@ def process_medcat_batch(
 # ================= MAIN =================
 
 def main():
-    input_root = Path("/home/msztr1/Projects/FAIRClinical_NLP_Pipeline/Original")
-    cat = CAT.load_model_pack("models/v2_Snomed2025_MIMIC_IV_bbe806e192df009f.zip")
-    cat.pipe.tokenizer._nlp.max_length = 2_000_000
+    input_root = Path(DOCUMENT_INPUT_PATH)
+    cat = CAT.load_model_pack(MEDCAT_MODEL_PATH)
+    cat.pipe.tokenizer._nlp.max_length = TOKENIZER_MAX_LENGTH
 
-    conn_str = "host=localhost dbname=postgres user=postgres password=postgres"
+    conn_str = f"host={DB_HOST} dbname={DB_NAME} user={DB_USER} password={DB_PASS}"
 
     with psycopg.connect(conn_str) as conn:
         conn.execute("SET search_path TO omop_cdm")
