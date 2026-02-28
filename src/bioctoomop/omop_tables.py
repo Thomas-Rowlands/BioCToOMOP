@@ -28,7 +28,7 @@ def create_note_nlp_row(note_nlp_id, note_id, ent, text, source_concept_id=None,
         "note_nlp_source_concept_id": int(source_concept_id) if int(source_concept_id) < 2147483647 else None, # prevent overflow
         "nlp_system": "MedCAT",
         "nlp_date": date.today(),
-        "nlp_datetime": datetime.datetime.now(),
+        "nlp_datetime": datetime.now(),
         "term_modifiers": json.dumps(__get_term_modifiers(ent)),
     }
 
@@ -51,6 +51,8 @@ def _trim_snippet(snippet, max_length=250):
 
 # ---- PERSON TABLE ----
 def create_person_row(person_id: int, gender: int, year_of_birth: str, race: int, ethnicity: int) -> dict:
+    if isinstance(year_of_birth, int):
+        year_of_birth = str(year_of_birth)
     return {
         "person_id": person_id,
         "gender_concept_id": gender,  # Default to "Unknown"
