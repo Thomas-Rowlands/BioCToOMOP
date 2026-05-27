@@ -19,7 +19,7 @@ MedCAT models are publicly available, see download instructions here: https://gi
 
 To configure OMOP default concept IDs, such as the "NLP derived" measurement type or "Clinical document" type, the `.env` file located in the *scripts* folder should be modified according to your OMOP CDM installation.
 
-The CogStack MedCAT model is used within this demonstration, with the model file path specified within the `.env` file.
+The CogStack MedCAT model is used within this demonstration as an example, with the model file path specified within the `.env` file.
 
 ## Usage
 
