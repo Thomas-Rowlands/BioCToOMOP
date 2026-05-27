@@ -28,3 +28,12 @@ The main entry point for executing the pipeline is the run_python.py script loca
 ```bash
 uv run scripts/run_pipeline.py
 ```
+
+## How it works
+
+1. Ingestion of BioC corpora (full-text and supplementary).
+2. Documents are filtered so only passages containing information about the case are annotated.
+3. Documents are annotated in batches using MedCAT by default.
+4. Normalized entities are mapped to OMOP CDM concepts by querying the target database containing a matching vocabulary (e.g. SNOMED).
+5. OMOP-ready records are structured with the annotation data and concept ID into the associated domain table (e.g. Condition Occurrence).
+6. Records are grouped for the same Person and inserted into the target OMOP DB.
