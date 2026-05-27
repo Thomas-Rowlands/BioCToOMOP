@@ -15,30 +15,41 @@ from medcat.cat import CAT
 from bioctoomop.bioc_parser import parse_bioc_file
 from bioctoomop.medcat_runner import run_medcat_single_note
 from note import make_note
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # --- CONFIGURATION ---
-NOTE_BATCH_SIZE = 50
-NOTE_NLP_BATCH_SIZE = 5000
-TEST_LIMIT = None # Set to an integer for testing with a subset of data  
+NOTE_BATCH_SIZE = os.environ.get("NOTE_BATCH_SIZE")
+NOTE_NLP_BATCH_SIZE = os.environ.get("NOTE_NLP_BATCH_SIZE")
+TEST_LIMIT = os.environ.get("TEST_LIMIT") # Set to an integer for testing with a subset of data  
 
-# --- FIXED CONCEPT IDS FROM YOUR ETL RULES ---
-NLP_DERIVED_MEAS_TYPE_ID = 32423 # "NLP derived" measurement type
-NLP_DERIVED_CONDITION_TYPE_ID = 32424 # "NLP derived" condition type
-NLP_DERIVED_PROCEDURE_TYPE_ID = 32425 # "NLP derived" procedure type
-NLP_DERIVED_DRUG_TYPE_ID = 32426 # "NLP derived" drug type
-NLP_DERIVED_OBSERVATION_TYPE_ID = 32445 # "NLP derived" observation type
-CLINICAL_DOC_TYPE_ID = 4309829 # "Clinical document" type concept
-UTF8_ENCODING_ID = 32678 # "UTF-8"
-ENGLISH_LANGUAGE_ID = 4180186 # "English language"
+# Concept IDs
+NLP_DERIVED_MEAS_TYPE_ID =  os.environ.get("NLP_DERIVED_MEAS_TYPE_ID")  # "NLP derived" measurement type
+NLP_DERIVED_CONDITION_TYPE_ID = os.environ.get("NLP_DERIVED_CONDITION_TYPE_ID") # "NLP derived" condition type
+NLP_DERIVED_PROCEDURE_TYPE_ID = os.environ.get("NLP_DERIVED_PROCEDURE_TYPE_ID") # "NLP derived" procedure type
+NLP_DERIVED_DRUG_TYPE_ID = os.environ.get("NLP_DERIVED_DRUG_TYPE_ID") # "NLP derived" drug type
+NLP_DERIVED_OBSERVATION_TYPE_ID = os.environ.get("NLP_DERIVED_OBSERVATION_TYPE_ID") # "NLP derived" observation type
+CLINICAL_DOC_TYPE_ID = os.environ.get("CLINICAL_DOC_TYPE_ID") # "Clinical document" type concept
+UTF8_ENCODING_ID = os.environ.get("UTF8_ENCODING_ID") # "UTF-8"
+ENGLISH_LANGUAGE_ID = os.environ.get("ENGLISH_LANGUAGE_ID") # "English language"
+CURRENT_AGE_ONTOLOGY_ID = os.environ.get("CURRENT_AGE_ID") # "Current Chonological Age" ontology term
+ALTERNATIVE_AGE_ONTOLOGY_ID = os.environ.get("ALTERNATIVE_AGE_ONTOLOGY_ID") # Age AND/OR growth period (SNOMED)
+
+# FALLBACK CONCEPT IDs
+GENDER_CONCEPT_ID = os.environ.get("GENDER_CONCEPT_ID")
+RACE_CONCEPT_ID = os.environ.get("RACE_CONCEPT_ID")
+ETHNICITY_CONCEPT_ID = os.environ.get("ETHNICITY_CONCEPT_ID")
+
 
 # ================= DEMOGRAPHICS =================
 
 def get_default_demo_values(note_year: int):
     return {
         "year_of_birth": note_year - 40,
-        "gender_concept_id": 8551,
-        "race_concept_id": 4090518,
-        "ethnicity_concept_id": 759814,
+        "gender_concept_id": GENDER_CONCEPT_ID,
+        "race_concept_id": RACE_CONCEPT_ID,
+        "ethnicity_concept_id": ETHNICITY_CONCEPT_ID,
     }
 
 def get_processed_files(conn) -> dict:
@@ -96,13 +107,18 @@ def ensure_date(value):
 
     raise ValueError(f"Cannot convert {value} to date")
 
-
+def safe_concept_id(val, max_val=2_147_483_647):
+    try:
+        i = int(val)
+        return i if i < max_val else None
+    except (ValueError, TypeError):
+        return None
 
 def extract_demographics(entities, route_map, note_date):
     defaults = get_default_demo_values(note_date.year)
     found = {k: None for k in defaults}
 
-    AGE_SNOMED_CODES = {"424144002", "105727008"}
+    AGE_ONTOLOGY_CODES = {CURRENT_AGE_ONTOLOGY_ID, ALTERNATIVE_AGE_ONTOLOGY_ID}
 
     for ent in entities:
         s_id = str(ent.get("snomed_id"))
@@ -120,7 +136,7 @@ def extract_demographics(entities, route_map, note_date):
         elif dom == "Ethnicity" and not found["ethnicity_concept_id"]:
             found["ethnicity_concept_id"] = concept_id
 
-        if s_id in AGE_SNOMED_CODES:
+        if s_id in AGE_ONTOLOGY_CODES:
             age = safe_parse_age(ent.get("value"))
             if age:
                 found["year_of_birth"] = note_date.year - age
@@ -167,11 +183,11 @@ class OMOPETLManager:
 
         return result
 
-    def get_routing_map(self, snomed_codes):
-        if not snomed_codes:
+    def get_routing_map(self, ontology_codes, ontology_prefix="SNOMED"):
+        if not ontology_codes:
             return {}
 
-        query = """
+        query = f"""
         SELECT 
             source.concept_code,
             COALESCE(target.concept_id, source.concept_id) AS standard_concept_id,
@@ -184,11 +200,11 @@ class OMOPETLManager:
         LEFT JOIN concept target
             ON cr.concept_id_2 = target.concept_id
         WHERE source.concept_code = ANY(%s::text[])
-        AND source.vocabulary_id ILIKE 'SNOMED%%';
+        AND source.vocabulary_id ILIKE '{ontology_prefix}%%';
         """
 
         with self.conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(query, (list(set(snomed_codes)),))
+            cur.execute(query, (list(set(ontology_codes)),))
             rows = cur.fetchall()
 
         return {r["concept_code"]: r for r in rows}
@@ -337,11 +353,11 @@ def process_medcat_batch(
             note_nlp_buffer.append({
                 "note_nlp_id": note_nlp_id,
                 "note_id": note_id,
-                "snippet": sentence_text[:250],
+                "snippet": (sentence_text or "")[:250],
                 "offset": f"{ent['start_offset']}:{ent['end_offset']}",
                 "lexical_variant": ent.get("lexical_variant"),
                 "note_nlp_concept_id": mapping["standard_concept_id"],
-                "note_nlp_source_concept_id": int(snomed) if int(snomed) < 2147483647 else None, # prevent overflow
+                "note_nlp_source_concept_id": safe_concept_id(snomed),
                 "nlp_system": "MedCAT",
                 "nlp_date": datetime.date.today(),
                 "nlp_datetime": datetime.datetime.now(),
@@ -416,7 +432,7 @@ def process_medcat_batch(
 # ================= MAIN =================
 
 def main():
-    input_root = Path("/home/msztr1/Projects/FAIRClinical_NLP_Pipeline/Original")
+    input_root = Path("/mnt/sda2/Projects/FAIRClinical_NLP_Pipeline/Original")
     cat = CAT.load_model_pack("models/v2_Snomed2025_MIMIC_IV_bbe806e192df009f.zip")
     cat.pipe.tokenizer._nlp.max_length = 2_000_000
 
@@ -468,7 +484,7 @@ def main():
                 pmc_id = str(bioc_file.parent.name).replace("_supplementary", "")
                 is_supplementary = True
 
-            trimmed_file_name = F"{pmc_id}::{str(bioc_file.name)}"[:50]
+            trimmed_file_name = F"{pmc_id}::{str(bioc_file.name)}"[:250]
             trimmed_file_name = trimmed_file_name.split("::")[1]
 
             if pmc_id in processed_files and trimmed_file_name in processed_files[pmc_id]:
